@@ -30,7 +30,7 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-pbssa02^_pwx$c1nj9c
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = [ '.herokuapp.com/' ]
+ALLOWED_HOSTS = [ '.herokuapp.com' ]
 
 
 # Application definition
