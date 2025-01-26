@@ -152,3 +152,5 @@ CORS_ALLOW_HEADERS = [
     'Cookie',
     'Set-Cookie',
 ]
+
+CORS_ALLOW_CREDENTIALS = True
