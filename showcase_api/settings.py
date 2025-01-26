@@ -138,22 +138,17 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_METHODS = [
-    'DELETE',
     'GET',
-    'OPTIONS',
-    'PATCH',
     'POST',
-    'PUT',
+    'OPTIONS',
+    'HEAD',
 ]
 
 CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
+    'Content-Type',
+    'X-Requested-With',
+    'Authorization',
+    'X-CSRFToken',
+    'Cookie',
+    'Set-Cookie',
 ]
