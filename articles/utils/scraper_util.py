@@ -1,137 +1,109 @@
-import requests
-from bs4 import BeautifulSoup
-from typing import List, Dict
-import time
-from urllib.parse import urljoin
-import json
+# articles/management/commands/scrape_medium.py
 
-class MediumScraper:
-    def __init__(self):
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive',
-        }
-        self.session = requests.Session()
-        self.session.headers.update(self.headers)
+import datetime
+from django.core.management.base import BaseCommand
+from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
+from articles.models import Article
+
+class Command(BaseCommand):
+    help = 'Scrapes articles from a Medium profile and updates the database'
+
+    def add_arguments(self, parser):
+        parser.add_argument('username', type=str, help='Medium username to scrape')
+        parser.add_argument(
+            '--replace',
+            action='store_true',
+            help='Replace all existing articles (default: only add new ones)',
+        )
+
+    def handle(self, *args, **options):
+        username = options['username']
+        replace = options['replace']
         
-    def get_profile_page(self, username: str) -> str:
-        """
-        Fetch the Medium profile page content.
-        
-        Args:
-            username (str): Medium username (without @)
-            
-        Returns:
-            str: HTML content of the profile page
-        """
-        if username.startswith('@'):
-            username = username[1:]
-            
-        url = f'https://medium.com/@{username}'
+        self.stdout.write(f"Starting Medium scrape for user: {username}")
         
         try:
-            response = self.session.get(url)
-            response.raise_for_status()
-            return response.text
-        except requests.RequestException as e:
-            raise Exception(f"Failed to fetch profile page: {str(e)}")
-
-    def extract_article_details(self, html_content: str) -> List[Dict[str, str]]:
-        """
-        Extract article details from Medium profile page HTML content.
-        
-        Args:
-            html_content (str): HTML content to parse
+            # Initialize the scraper
+            from articles.utils.scraper_util import MediumScraper  # Import your scraper class
+            scraper = MediumScraper()
             
-        Returns:
-            List[Dict[str, str]]: List of dictionaries containing article details
-        """
-        soup = BeautifulSoup(html_content, 'html.parser')
-        articles = soup.find_all('article')
-        results = []
-        
-        for article in articles:
-            article_data = {
-                'title': '',
-                'subtitle': '',
-                'link': '',
-                'image_url': '',
-                'date': ''
-            }
+            # Fetch and parse the articles
+            html_content = scraper.get_profile_page(username)
+            articles = scraper.extract_article_details(html_content)
             
-            # Extract title
-            title_element = article.find('h2')
-            if title_element:
-                article_data['title'] = title_element.get_text(strip=True)
-            
-            # Extract subtitle
-            subtitle_element = article.find('h3')
-            if subtitle_element:
-                article_data['subtitle'] = subtitle_element.get_text(strip=True)
-            
-            # Extract link
-            link_element = article.find('a', href=True)
-            if link_element:
-                article_data['link'] = urljoin('https://medium.com', link_element['href'])
-            
-            # Extract image URL
-            image_element = article.find('img', {'alt': article_data['title']})
-            if image_element and 'src' in image_element.attrs:
-                article_data['image_url'] = image_element['src']
-            
-            # Extract date
-            date_element = article.find('span', string=lambda text: text and any(month in text for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']))
-            if date_element:
-                article_data['date'] = date_element.get_text(strip=True)
-            
-            if article_data['title']:  # Only add articles that have at least a title
-                results.append(article_data)
-        
-        return results
-
-    def save_to_json(self, articles: List[Dict[str, str]], filename: str):
-        """
-        Save the extracted articles to a JSON file.
-        
-        Args:
-            articles (List[Dict[str, str]]): List of article dictionaries
-            filename (str): Output filename
-        """
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(articles, f, indent=2, ensure_ascii=False)
-
-def main():
-    # Initialize scraper
-    scraper = MediumScraper()
-    
-    try:
-        # Get username from command line or use default
-        username = "@thomcleary15"
-        
-        # Fetch and parse the profile page
-        print(f"Fetching articles for {username}...")
-        html_content = scraper.get_profile_page(username)
-        
-        # Extract article details
-        articles = scraper.extract_article_details(html_content)
-        
-        # Save to JSON file
-        output_filename = f"medium_{username.replace('@', '')}_articles.json"
-        scraper.save_to_json(articles, output_filename)
-        
-        # Print results
-        print(f"\nFound {len(articles)} articles:")
-        for idx, article in enumerate(articles, 1):
-            print(f"\nArticle {idx}:")
-            for key, value in article.items():
-                print(f"{key}: {value}")
+            with transaction.atomic():
+                if replace:
+                    self.stdout.write("Deleting existing articles...")
+                    Article.objects.all().delete()
                 
-        print(f"\nResults have been saved to {output_filename}")
-        
-    except Exception as e:
-        print(f"Error: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+                created_count = 0
+                updated_count = 0
+                skipped_count = 0
+                
+                for article_data in articles:
+                    # Prepare base article data (required fields only)
+                    article_dict = {
+                        'title': article_data['title'],
+                        'subtitle': article_data['subtitle'],
+                        'url': article_data['link'],
+                        'img_url': article_data['image_url'],
+                    }
+                    
+                    try:
+                        # Try to get existing article by URL
+                        article, created = Article.objects.get_or_create(
+                            url=article_dict['url'],
+                            defaults=article_dict
+                        )
+                        
+                        # Update existing article if needed
+                        if not created:
+                            for key, value in article_dict.items():
+                                setattr(article, key, value)
+                            article.save()
+                        
+                        if created:
+                            created_count += 1
+                            self.stdout.write(f"Created: {article.title}")
+                        else:
+                            updated_count += 1
+                            self.stdout.write(f"Updated: {article.title}")
+                            
+                    except (OperationalError, ProgrammingError) as e:
+                        if 'published_date' in str(e):
+                            # Remove published_date and try again
+                            if 'published_date' in article_dict:
+                                del article_dict['published_date']
+                            article, created = Article.objects.get_or_create(
+                                url=article_dict['url'],
+                                defaults=article_dict
+                            )
+                            if created:
+                                created_count += 1
+                            else:
+                                updated_count += 1
+                        else:
+                            self.stdout.write(self.style.WARNING(
+                                f"Error processing article '{article_dict['title']}': {str(e)}"
+                            ))
+                            skipped_count += 1
+                            continue
+                    except Exception as e:
+                        self.stdout.write(self.style.WARNING(
+                            f"Error processing article '{article_dict['title']}': {str(e)}"
+                        ))
+                        skipped_count += 1
+                        continue
+                
+                # Print summary
+                self.stdout.write(self.style.SUCCESS(
+                    f"\nScraping completed:"
+                    f"\n- Created: {created_count}"
+                    f"\n- Updated: {updated_count}"
+                    f"\n- Skipped: {skipped_count}"
+                ))
+                
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Scraping failed: {str(e)}"))
+            raise
