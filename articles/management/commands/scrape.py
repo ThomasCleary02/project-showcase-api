@@ -1,41 +1,10 @@
-# yourapp/management/commands/scrape_medium.py
+# articles/management/commands/scrape_medium.py
 
 import datetime
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.utils.dateparse import parse_date
-from articles.models import Article
-
-from typing import Optional
-
-class MediumDateParser:
-    @staticmethod
-    def parse_medium_date(date_str: str) -> Optional[datetime.date]:
-        """
-        Parse Medium's date format (e.g., 'Feb 6') into a datetime.date object.
-        Assumes current year if not specified.
-        """
-        if not date_str:
-            return None
-            
-        try:
-            # Remove any extra whitespace and split
-            parts = date_str.strip().split()
-            
-            if len(parts) == 2:  # Format: "Feb 6"
-                month, day = parts
-                year = datetime.datetime.now().year
-            elif len(parts) == 3:  # Format: "Feb 6, 2024"
-                month, day, year = parts
-                day = day.rstrip(',')
-            else:
-                return None
-                
-            # Convert to datetime
-            date_str = f"{month} {day} {year}"
-            return datetime.datetime.strptime(date_str, "%b %d %Y").date()
-        except (ValueError, IndexError):
-            return None
+from django.db.utils import OperationalError, ProgrammingError
+from articles.models import Article  # Replace 'your_app' with your actual app name
 
 class Command(BaseCommand):
     help = 'Scrapes articles from a Medium profile and updates the database'
@@ -73,35 +42,59 @@ class Command(BaseCommand):
                 skipped_count = 0
                 
                 for article_data in articles:
-                    # Parse the date
-                    published_date = MediumDateParser.parse_medium_date(article_data.get('date'))
-                    
-                    # Prepare article data
+                    # Prepare base article data (required fields only)
                     article_dict = {
                         'title': article_data['title'],
                         'subtitle': article_data['subtitle'],
                         'url': article_data['link'],
                         'img_url': article_data['image_url'],
-                        'published_date': published_date,
                     }
                     
                     try:
                         # Try to get existing article by URL
-                        article, created = Article.objects.update_or_create(
+                        article, created = Article.objects.get_or_create(
                             url=article_dict['url'],
                             defaults=article_dict
                         )
                         
+                        # Update existing article if needed
+                        if not created:
+                            for key, value in article_dict.items():
+                                setattr(article, key, value)
+                            article.save()
+                        
                         if created:
                             created_count += 1
+                            self.stdout.write(f"Created: {article.title}")
                         else:
                             updated_count += 1
+                            self.stdout.write(f"Updated: {article.title}")
                             
+                    except (OperationalError, ProgrammingError) as e:
+                        if 'published_date' in str(e):
+                            # Remove published_date and try again
+                            if 'published_date' in article_dict:
+                                del article_dict['published_date']
+                            article, created = Article.objects.get_or_create(
+                                url=article_dict['url'],
+                                defaults=article_dict
+                            )
+                            if created:
+                                created_count += 1
+                            else:
+                                updated_count += 1
+                        else:
+                            self.stdout.write(self.style.WARNING(
+                                f"Error processing article '{article_dict['title']}': {str(e)}"
+                            ))
+                            skipped_count += 1
+                            continue
                     except Exception as e:
                         self.stdout.write(self.style.WARNING(
                             f"Error processing article '{article_dict['title']}': {str(e)}"
                         ))
                         skipped_count += 1
+                        continue
                 
                 # Print summary
                 self.stdout.write(self.style.SUCCESS(
