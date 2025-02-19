@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path, include
 from rest_framework import routers
 from projects.views import ProjectViewSet
+from articles.views import ArticleViewSet
 
 # Projects Router
 projects_router = routers.SimpleRouter()
@@ -27,7 +28,16 @@ projects_router.register(
     basename='project',
 )
 
+# Article Router
+articles_router = routers.SimpleRouter()
+articles_router.register(
+    r'articles',
+    ArticleViewSet,
+    basename='article',
+)
+
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/', include(projects_router.urls))
+    path('api/', include(projects_router.urls)),
+    path('api/', include(articles_router.urls))
 ]
